@@ -27,8 +27,8 @@ jobs:
         working-directory: simple_live_app
         run: flutter build windows --release
 
-      - name: Upload Artifact
+      - name: Upload All Release Files
         uses: actions/upload-artifact@v4
         with:
           name: simple_live_windows
-          path: simple_live_app\build\windows\runner\Release\simple_live_app.exe
+          path: simple_live_app/build/windows/runner/Release/
