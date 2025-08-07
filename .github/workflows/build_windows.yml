@@ -1,0 +1,35 @@
+name: Build Windows Desktop App
+
+on:
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  build:
+    name: Build on Windows
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.22.0'  # 项目要求版本
+          channel: stable
+
+      - name: Enable Windows desktop
+        run: flutter config --enable-windows-desktop
+
+      - name: Install dependencies
+        working-directory: simple_live_app
+        run: flutter pub get
+
+      - name: Build Windows Release
+        working-directory: simple_live_app
+        run: flutter build windows --release
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: simple_live_windows
+          path: simple_live_app/build/windows/runner/Release/
