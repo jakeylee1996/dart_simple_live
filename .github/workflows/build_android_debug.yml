@@ -1,4 +1,4 @@
-name: Build Android Debug (Flutter)
+name: Build Android Debug
 
 on:
   workflow_dispatch:
