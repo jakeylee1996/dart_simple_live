@@ -1,4 +1,4 @@
-name: Build Android Debug
+name: Build Android Debug (Flutter)
 
 on:
   workflow_dispatch:
@@ -37,20 +37,37 @@ jobs:
           flutter --version
           flutter doctor -v
 
+      - name: Detect Flutter project dir
+        id: detect
+        shell: bash
+        run: |
+          set -e
+          MATCH=$(find . -maxdepth 4 -type f -name pubspec.yaml | head -n1)
+          if [ -z "$MATCH" ]; then
+            echo "❌ pubspec.yaml not found in repo. Please ensure your Flutter project is committed." >&2
+            exit 1
+          fi
+          DIR=$(dirname "$MATCH")
+          echo "✅ Found Flutter project at: $DIR"
+          echo "project_dir=$DIR" >> "$GITHUB_OUTPUT"
+
       - name: Get packages
         run: flutter pub get
+        working-directory: ${{ steps.detect.outputs.project_dir }}
 
       - name: Build debug APK (verbose)
         run: flutter build apk --debug -v
+        working-directory: ${{ steps.detect.outputs.project_dir }}
 
       - name: List outputs
         run: |
           ls -lah build/app/outputs/flutter-apk || true
           ls -lah build/app/outputs || true
+        working-directory: ${{ steps.detect.outputs.project_dir }}
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
           name: android-debug-apk
-          path: build/app/outputs/flutter-apk/app-debug.apk
+          path: ${{ steps.detect.outputs.project_dir }}/build/app/outputs/flutter-apk/app-debug.apk
           if-no-files-found: error
