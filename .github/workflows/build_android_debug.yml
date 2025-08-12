@@ -37,9 +37,7 @@ jobs:
         working-directory: simple_live_tv_app
         run: flutter pub get
 
-      # 关键：生成临时 keystore，并为两个子项目写 key.properties
       - name: Create temporary keystore for CI
-        shell: bash
         run: |
           keytool -genkey -v \
             -keystore "$HOME/simplelive-temp.jks" \
@@ -49,15 +47,12 @@ jobs:
 
           for APP in simple_live_app simple_live_tv_app; do
             mkdir -p "$APP/android"
-            cat > "$APP/android/key.properties" <<EOF
-storePassword=123456
-keyPassword=123456
-keyAlias=upload
-storeFile=$HOME/simplelive-temp.jks
-EOF
+            echo "storePassword=123456" > "$APP/android/key.properties"
+            echo "keyPassword=123456" >> "$APP/android/key.properties"
+            echo "keyAlias=upload" >> "$APP/android/key.properties"
+            echo "storeFile=$HOME/simplelive-temp.jks" >> "$APP/android/key.properties"
           done
 
-      # 打包 Debug APK（现在有假的 release 签名可用，能过编译）
       - name: Build debug APK (app)
         working-directory: simple_live_app
         run: flutter build apk --debug
