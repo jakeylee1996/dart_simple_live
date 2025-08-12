@@ -1,0 +1,61 @@
+name: build-windows-only
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch to build (dev or master)"
+        required: true
+        default: "master"
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      # 1) 拉代码 + 子模块（关键）
+      - name: Checkout repo (with submodules)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch }}
+          fetch-depth: 0
+          submodules: recursive
+
+      # 2) 安装 Flutter
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.22.x"
+          cache: true
+
+      # 3) 启用 Windows 桌面
+      - name: Enable Windows Desktop
+        run: flutter config --enable-windows-desktop
+
+      # 4) 拉依赖
+      - name: Restore Packages
+        shell: pwsh
+        run: |
+          cd simple_live_app
+          flutter pub get
+
+      # 5) 安装 flutter_distributor
+      - name: Install flutter_distributor
+        shell: pwsh
+        run: dart pub global activate flutter_distributor
+
+      # 6) 打包 MSIX & ZIP
+      - name: Build Windows (msix & zip)
+        shell: pwsh
+        run: |
+          cd simple_live_app
+          flutter_distributor package --platform windows --targets msix,zip --skip-clean
+
+      # 7) 上传产物
+      - name: Upload Windows Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            simple_live_app/build/dist/*/*.msix
+            simple_live_app/build/dist/*/*.zip
