@@ -153,7 +153,34 @@ jobs:
               fi
             done
           fi
-
+      - name: Align Java/Kotlin toolchains to 17 for all modules
+        run: |
+          set -eux
+          fix_module() {
+            local DIR="$1"
+            local B="$DIR/build.gradle"
+            [ -f "$B" ] || return 0
+            # 追加 android{} 块；Gradle 会与现有配置合并（不影响已有 compileOptions/kotlinOptions）
+            printf '\nandroid {\n' >> "$B"
+            printf '    compileOptions {\n' >> "$B"
+            printf '        sourceCompatibility JavaVersion.VERSION_17\n' >> "$B"
+            printf '        targetCompatibility JavaVersion.VERSION_17\n' >> "$B"
+            printf '    }\n' >> "$B"
+            printf '    kotlinOptions {\n' >> "$B"
+            printf '        jvmTarget = "17"\n' >> "$B"
+            printf '    }\n' >> "$B"
+            printf '}\n' >> "$B"
+          }
+          # 处理两个 app 模块
+          fix_module simple_live_app/android/app
+          fix_module simple_live_tv_app/android/app
+          # 扫描 pub 缓存中的所有插件模块
+          BASE="$HOME/.pub-cache/hosted/pub.dev"
+          if [ -d "$BASE" ]; then
+            find "$BASE" -maxdepth 2 -type d -name android | while read -r ANDROID_DIR; do
+              fix_module "$ANDROID_DIR"
+            done
+          fi
       # ✅ 关键修复：开启 core library desugaring，修复 qr_code_scanner 报错
       - name: Enable core library desugaring (both apps)
         run: |
