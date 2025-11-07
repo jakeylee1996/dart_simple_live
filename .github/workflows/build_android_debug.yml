@@ -17,7 +17,6 @@ on:
 
 env:
   CI: true
-  # 临时签名的默认值（如未配置正式 keystore 会用到）
   ANDROID_KEY_ALIAS: upload
   ANDROID_KEY_PASSWORD: 123456
   ANDROID_STORE_PASSWORD: 123456
@@ -27,7 +26,6 @@ jobs:
   build-mobile:
     name: Build mobile (simple_live_app)
     runs-on: ubuntu-latest
-    # 手动触发时按输入过滤；推 tag 时两个 job 都跑
     if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.targets == 'both' || github.event.inputs.targets == 'mobile' }}
 
     steps:
@@ -78,13 +76,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pub-
 
-      # 关键：覆盖 intl 到 0.20.2，解决与 flutter_localizations 的版本冲突
-      - name: Write pubspec_overrides (intl=0.20.2)
+      # 关键覆盖：intl 与 media_kit_video
+      - name: Write pubspec_overrides (intl=0.20.2, media_kit_video ^1.3.0)
         working-directory: simple_live_app
         run: |
           cat > pubspec_overrides.yaml <<'EOF'
           dependency_overrides:
             intl: 0.20.2
+            media_kit_video: ^1.3.0
           EOF
           rm -f pubspec.lock
 
@@ -225,12 +224,13 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pub-
 
-      - name: Write pubspec_overrides (intl=0.20.2)
+      - name: Write pubspec_overrides (intl=0.20.2, media_kit_video ^1.3.0)
         working-directory: simple_live_tv_app
         run: |
           cat > pubspec_overrides.yaml <<'EOF'
           dependency_overrides:
             intl: 0.20.2
+            media_kit_video: ^1.3.0
           EOF
           rm -f pubspec.lock
 
