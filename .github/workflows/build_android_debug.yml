@@ -17,6 +17,7 @@ on:
 
 env:
   CI: true
+  # 临时签名的默认值（如未配置正式 keystore 会用到）
   ANDROID_KEY_ALIAS: upload
   ANDROID_KEY_PASSWORD: 123456
   ANDROID_STORE_PASSWORD: 123456
@@ -26,8 +27,9 @@ jobs:
   build-mobile:
     name: Build mobile (simple_live_app)
     runs-on: ubuntu-latest
-    # workflow_dispatch 时按输入决定；push tag 时两个 job 都跑
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.targets == 'both' || inputs.targets == 'mobile' }}
+    # 手动触发时按输入过滤；推 tag 时两个 job 都跑
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.targets == 'both' || github.event.inputs.targets == 'mobile' }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -72,9 +74,19 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.pub-cache
-          key: ${{ runner.os }}-pub-${{ hashFiles('simple_live_app/pubspec.lock') }}
+          key: ${{ runner.os }}-pub-${{ hashFiles('simple_live_app/pubspec.yaml') }}
           restore-keys: |
             ${{ runner.os }}-pub-
+
+      # 关键：覆盖 intl 到 0.20.2，解决与 flutter_localizations 的版本冲突
+      - name: Write pubspec_overrides (intl=0.20.2)
+        working-directory: simple_live_app
+        run: |
+          cat > pubspec_overrides.yaml <<'EOF'
+          dependency_overrides:
+            intl: 0.20.2
+          EOF
+          rm -f pubspec.lock
 
       - name: Pub get
         working-directory: simple_live_app
@@ -131,7 +143,7 @@ jobs:
         working-directory: simple_live_app
         run: |
           set -eux
-          build="${{ inputs.build || 'both' }}"
+          build="${{ github.event.inputs.build || 'both' }}"
           if [[ "$build" == "apk" ]]; then
             flutter build apk --release
           elif [[ "$build" == "aab" ]]; then
@@ -163,7 +175,8 @@ jobs:
   build-tv:
     name: Build tv (simple_live_tv_app)
     runs-on: ubuntu-latest
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.targets == 'both' || inputs.targets == 'tv' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.targets == 'both' || github.event.inputs.targets == 'tv' }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -208,9 +221,18 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.pub-cache
-          key: ${{ runner.os }}-pub-${{ hashFiles('simple_live_tv_app/pubspec.lock') }}
+          key: ${{ runner.os }}-pub-${{ hashFiles('simple_live_tv_app/pubspec.yaml') }}
           restore-keys: |
             ${{ runner.os }}-pub-
+
+      - name: Write pubspec_overrides (intl=0.20.2)
+        working-directory: simple_live_tv_app
+        run: |
+          cat > pubspec_overrides.yaml <<'EOF'
+          dependency_overrides:
+            intl: 0.20.2
+          EOF
+          rm -f pubspec.lock
 
       - name: Pub get
         working-directory: simple_live_tv_app
@@ -267,7 +289,7 @@ jobs:
         working-directory: simple_live_tv_app
         run: |
           set -eux
-          build="${{ inputs.build || 'both' }}"
+          build="${{ github.event.inputs.build || 'both' }}"
           if [[ "$build" == "apk" ]]; then
             flutter build apk --release
           elif [[ "$build" == "aab" ]]; then
