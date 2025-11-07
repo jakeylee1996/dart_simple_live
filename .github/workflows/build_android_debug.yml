@@ -46,8 +46,10 @@ jobs:
 
       - name: Install Android SDK components (API 35)
         run: |
-          yes | sdkmanager --licenses
-          yes | sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          ANDROID_SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          yes | "${ANDROID_SDK}/cmdline-tools/latest/bin/sdkmanager" --licenses
+          yes | "${ANDROID_SDK}/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Force Kotlin Gradle plugin to 1.9.24 (both apps)
         run: |
