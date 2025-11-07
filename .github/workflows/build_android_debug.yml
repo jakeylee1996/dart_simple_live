@@ -1,6 +1,6 @@
-# .github/workflows/build_android_release.yml
+# .github/workflows/build_android_apk.yml
 
-name: Build Android Release
+name: Build Android Release (APK)
 
 # 触发器：当有代码推送到 master 分支时触发
 on:
@@ -12,7 +12,7 @@ on:
 
 jobs:
   build-android:
-    name: Build Android App Bundle
+    name: Build Android APK
     runs-on: ubuntu-latest
 
     steps:
@@ -24,39 +24,34 @@ jobs:
       - name: Setup Java JDK
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin' # 使用 Temurin (Eclipse Adoptium)
-          java-version: '17'     # 建议使用 JDK 17
+          distribution: 'temurin'
+          java-version: '17'
 
-      # 3. 设置 Flutter 环境 (关键：指定项目要求的版本)
-      #    该项目 README 指定了 Flutter 3.22
+      # 3. 设置 Flutter 环境 (关键：指定项目要求的版本 3.22)
       - name: Setup Flutter SDK
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.22.0' # 精确指定版本以确保一致性
+          flutter-version: '3.22.0' # 精确指定版本
           channel: 'stable'
-          cache: true # 启用 Flutter SDK 缓存
+          cache: true
 
-      # 4. 切换到 Flutter app 目录
-      #    这是一个 monorepo，必须进入 app 的子目录
-      - name: Change to app directory
-        run: cd simple_live_app
-
-      # 5. 获取 Flutter 依赖
-      #    注意：所有 flutter 命令都需要在 app 目录中运行
+      # 4. 获取 Flutter 依赖
+      #    注意：必须在 'simple_live_app' 子目录中运行
       - name: Get Flutter dependencies
         run: flutter pub get
         working-directory: ./simple_live_app # 指定工作目录
 
-      # 6. 编译 Android App Bundle (Release)
-      - name: Build Android App Bundle
-        run: flutter build appbundle --release
+      # 5. 编译 Android APK (Release)
+      #    这是修改的关键点：使用 "build apk"
+      - name: Build Android APK
+        run: flutter build apk --release
         working-directory: ./simple_live_app # 指定工作目录
 
-      # 7. 上传构建产物 (AAB 文件)
-      #    这样您就可以在 Actions 页面下载编译好的文件
-      - name: Upload Artifact (App Bundle)
+      # 6. 上传构建产物 (APK 文件)
+      #    路径已更新为 APK 的默认输出路径
+      - name: Upload Artifact (APK)
         uses: actions/upload-artifact@v4
         with:
-          name: release-appbundle
-          path: simple_live_app/build/app/outputs/bundle/release/app-release.aab
+          name: release-apk
+          path: simple_live_app/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error # 如果没找到文件，则报错
