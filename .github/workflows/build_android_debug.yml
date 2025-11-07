@@ -19,7 +19,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      # 安装 Android SDK（含 cmdline-tools），提供 sdkmanager
+      # Android SDK（含 cmdline-tools），提供 sdkmanager
       - name: Set up Android SDK (cmdline-tools)
         uses: android-actions/setup-android@v3
 
@@ -59,7 +59,7 @@ jobs:
           yes | "${ANDROID_SDK}/cmdline-tools/latest/bin/sdkmanager" \
             "platform-tools" "platforms;android-36" "build-tools;36.0.0-rc1"
 
-      # 升级 Kotlin Gradle 插件到 1.9.24（解决 1.6/1.8 元数据不兼容）
+      # Kotlin 插件 1.9.24
       - name: Force Kotlin Gradle plugin to 1.9.24 (both apps)
         run: |
           set -eux
@@ -73,7 +73,7 @@ jobs:
             fi
           done
 
-      # 升级 Android Gradle Plugin 到 8.5.2（稳妥支持 compileSdk 36）
+      # AGP 8.5.2
       - name: Bump Android Gradle Plugin to 8.5.2 (both apps)
         run: |
           set -eux
@@ -84,7 +84,7 @@ jobs:
             fi
           done
 
-      # 旧式 classpath 写法时，强制 classpath 到 AGP 8.5.2
+      # 旧式 classpath 的兼容
       - name: Force AGP classpath to 8.5.2 for legacy builds (both apps)
         run: |
           set -eux
@@ -95,7 +95,7 @@ jobs:
             fi
           done
 
-      # 把 compileSdk/targetSdk 改为 36（两套 app）
+      # compile/target SDK 36
       - name: Set compileSdk/targetSdk to 36 (both apps)
         run: |
           set -eux
@@ -107,7 +107,7 @@ jobs:
             fi
           done
 
-      # 升级 Gradle wrapper 到 8.7（AGP 8.5 的最低要求）
+      # Gradle wrapper 8.7（AGP 8.5 最低）
       - name: Bump Gradle wrapper to 8.7 (both apps)
         run: |
           set -eux
@@ -130,7 +130,7 @@ jobs:
         working-directory: simple_live_tv_app
         run: flutter pub get
 
-      # 🔧 给老插件补 namespace（含 flutter_inappwebview 5.x），避免 AGP 8 报错
+      # 给缺 namespace 的老插件打补丁（如 flutter_inappwebview 5.x）
       - name: Patch namespaces for legacy plugins (AGP 8 requirement)
         run: |
           set -eux
@@ -139,7 +139,6 @@ jobs:
             find "$BASE" -maxdepth 2 -type d -name android | while read -r ANDROID_DIR; do
               B="$ANDROID_DIR/build.gradle"
               M="$ANDROID_DIR/src/main/AndroidManifest.xml"
-              # 仅当 build.gradle 存在且尚未声明 namespace 时处理
               if [ -f "$B" ] && ! grep -qE '^[[:space:]]*namespace[[:space:]]' "$B"; then
                 if [ -f "$M" ]; then
                   PKG=$(grep -m1 -oE 'package="[^"]+"' "$M" | sed -E 's/package="([^"]+)"/\1/')
@@ -154,6 +153,38 @@ jobs:
               fi
             done
           fi
+
+      # ✅ 关键修复：开启 core library desugaring，修复 qr_code_scanner 报错
+      - name: Enable core library desugaring (both apps)
+        run: |
+          set -eux
+          for APP in simple_live_app simple_live_tv_app; do
+            APP_GRADLE="$APP/android/app/build.gradle"
+            if [ -f "$APP_GRADLE" ]; then
+              # 追加一个 android{} 块，Gradle 会合并
+              cat >> "$APP_GRADLE" <<'EOF'
+
+android {
+    compileOptions {
+        // 使用 Java 8 字节码，便于 desugaring
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+        coreLibraryDesugaringEnabled true
+    }
+    kotlinOptions {
+        jvmTarget = '1.8'
+    }
+}
+EOF
+              # 追加一个 dependencies{} 块，声明 desugar 依赖
+              cat >> "$APP_GRADLE" <<'EOF'
+
+dependencies {
+    coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.0.4"
+}
+EOF
+            fi
+          done
 
       - name: Build release APK (app)
         working-directory: simple_live_app
