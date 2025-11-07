@@ -26,7 +26,6 @@ jobs:
           channel: 'stable'
           cache: true
 
-      # —— 缓存，加速构建（可选但推荐）——
       - name: Cache Gradle
         uses: actions/cache@v4
         with:
@@ -45,56 +44,35 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pub-
 
-      # —— 安装 Android SDK 35（避免 android-36 预览带来的 aapt2 问题）——
       - name: Install Android SDK components (API 35)
         run: |
           yes | sdkmanager --licenses
           yes | sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
-      # —— 统一两套 app（app / tv）的 Kotlin 插件版本到 1.9.24 —— 
-      # 兼容新旧项目结构：settings.gradle 的 plugins 块 或 build.gradle 的 ext.kotlin_version
-      - name: Force Kotlin Gradle plugin to 1.9.24
-        shell: bash
+      - name: Force Kotlin Gradle plugin to 1.9.24 (both apps)
         run: |
           set -eux
           for APP in simple_live_app simple_live_tv_app; do
-            # settings.gradle (plugins DSL)
             if [ -f "$APP/android/settings.gradle" ]; then
+              # plugins DSL
               sed -i 's/id[[:space:]]\+"org.jetbrains.kotlin.android"[[:space:]]\+version[[:space:]]\+"[^"]*"/id "org.jetbrains.kotlin.android" version "1.9.24"/' "$APP/android/settings.gradle" || true
             fi
-            # build.gradle (legacy)
             if [ -f "$APP/android/build.gradle" ]; then
+              # legacy ext.kotlin_version
               sed -i "s/ext\.kotlin_version\s*=.*/ext.kotlin_version = '1.9.24'/" "$APP/android/build.gradle" || true
               sed -i 's/kotlin-gradle-plugin:[0-9][^"]*/kotlin-gradle-plugin:1.9.24/' "$APP/android/build.gradle" || true
             fi
           done
 
-      # —— 临时在 CI 里 pin media_kit_libs_android_video 到 1.1.6（支持 compileSdk 35）——
-      # 这一步不会改你仓库，只在跑构建时把 override 注入
-      - name: Pin media_kit_libs_android_video to 1.1.6
-        shell: bash
+      - name: Pin media_kit_libs_android_video to 1.1.6 (CI only)
         run: |
           set -eux
-          inject_override() {
-            local file="$1"
-            if grep -q '^dependency_overrides:' "$file"; then
-              # 已有 dependency_overrides 节点则只追加条目
-              awk '
-                BEGIN{done=0}
-                /^dependency_overrides:/ && done==0 {print; print "  media_kit_libs_android_video: 1.1.6"; done=1; next}
-                {print}
-              ' "$file" > "${file}.new" && mv "${file}.new" "$file"
-            else
-              # 追加整个节点
-              cat >> "$file" <<'EOF'
-
-dependency_overrides:
-  media_kit_libs_android_video: 1.1.6
-EOF
-            fi
-          }
-          inject_override simple_live_app/pubspec.yaml
-          inject_override simple_live_tv_app/pubspec.yaml
+          for APP in simple_live_app simple_live_tv_app; do
+            cd "$APP"
+            # 只在 CI 进程里修改，不提交
+            dart pub add media_kit_libs_android_video:1.1.6
+            cd - >/dev/null
+          done
 
       - name: Flutter doctor
         run: flutter doctor -v
@@ -107,42 +85,33 @@ EOF
         working-directory: simple_live_tv_app
         run: flutter pub get
 
-      # —— 清理历史 Gradle 缓存，避免之前拉过 android-36 残留影响 —— 
-      - name: Clean Gradle caches
-        run: |
-          rm -rf ~/.gradle/caches/modules-2/files-2.1/androidx* || true
-
       - name: Build release APK (app)
         working-directory: simple_live_app
         run: |
-          # 临时 keystore（与原来一致）
+          set -eux
+          # 生成临时 keystore
           if [ ! -f "$HOME/simplelive-temp.jks" ]; then
-            keytool -genkey -v \
-              -keystore "$HOME/simplelive-temp.jks" \
+            keytool -genkey -v -keystore "$HOME/simplelive-temp.jks" \
               -storepass "123456" -keypass "123456" \
               -alias "upload" -keyalg RSA -keysize 2048 -validity 10000 \
               -dname "CN=CI, OU=CI, O=CI, L=CI, S=CI, C=US"
           fi
           mkdir -p android
-          cat > android/key.properties <<EOF
-storePassword=123456
-keyPassword=123456
-keyAlias=upload
-storeFile=$HOME/simplelive-temp.jks
-EOF
+          echo "storePassword=123456" > android/key.properties
+          echo "keyPassword=123456" >> android/key.properties
+          echo "keyAlias=upload" >> android/key.properties
+          echo "storeFile=$HOME/simplelive-temp.jks" >> android/key.properties
           flutter build apk --release
 
       - name: Build release APK (tv)
         working-directory: simple_live_tv_app
         run: |
-          # 复用 keystore
+          set -eux
           mkdir -p android
-          cat > android/key.properties <<EOF
-storePassword=123456
-keyPassword=123456
-keyAlias=upload
-storeFile=$HOME/simplelive-temp.jks
-EOF
+          echo "storePassword=123456" > android/key.properties
+          echo "keyPassword=123456" >> android/key.properties
+          echo "keyAlias=upload" >> android/key.properties
+          echo "storeFile=$HOME/simplelive-temp.jks" >> android/key.properties
           flutter build apk --release
 
       - name: Upload APK artifacts
