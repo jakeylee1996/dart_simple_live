@@ -1,36 +1,58 @@
-name: Build Android (Simple Live)
+name: Android Release Build
 
 on:
   workflow_dispatch:
+    inputs:
+      buildTargets:
+        description: "选择构建目标（apk / aab / both）"
+        required: false
+        default: "both"
   push:
-    branches: [ master ]
+    tags:
+      - "v*"
 
 jobs:
   build-android:
     runs-on: ubuntu-latest
+    env:
+      # Flutter 会读取这个变量以显示更详细日志
+      CI: true
+      # 默认签名信息（仅临时 keystore 使用）
+      ANDROID_KEY_ALIAS: upload
+      ANDROID_KEY_PASSWORD: 123456
+      ANDROID_STORE_PASSWORD: 123456
+      ANDROID_STORE_FILE: simplelive-temp.jks
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
-          java-version: '17'
+          distribution: temurin
+          java-version: "17"
 
-      # Android SDK（含 cmdline-tools），提供 sdkmanager
-      - name: Set up Android SDK (cmdline-tools)
+      - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Set up Flutter 3.22.x
+      - name: Install SDK components
+        run: |
+          sdkmanager --licenses <<< "y"
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Set up Flutter (stable)
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.22.x'
-          channel: 'stable'
+          channel: "stable"
           cache: true
 
-      # 缓存
+      - name: Flutter doctor
+        run: flutter doctor -v
+
       - name: Cache Gradle
         uses: actions/cache@v4
         with:
@@ -41,7 +63,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      - name: Cache Pub
+      - name: Cache Flutter pub
         uses: actions/cache@v4
         with:
           path: ~/.pub-cache
@@ -49,200 +71,93 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pub-
 
-      # 安装 36 平台与工具；若之前拉到坏包则先移除再装
-      - name: Install Android SDK components (API 36)
-        run: |
-          set -eux
-          ANDROID_SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
-          rm -rf "${ANDROID_SDK}/platforms/android-36" || true
-          yes | "${ANDROID_SDK}/cmdline-tools/latest/bin/sdkmanager" --licenses
-          yes | "${ANDROID_SDK}/cmdline-tools/latest/bin/sdkmanager" \
-            "platform-tools" "platforms;android-36" "build-tools;36.0.0-rc1"
-
-      # Kotlin 插件 1.9.24
-      - name: Force Kotlin Gradle plugin to 1.9.24 (both apps)
-        run: |
-          set -eux
-          for APP in simple_live_app simple_live_tv_app; do
-            if [ -f "$APP/android/settings.gradle" ]; then
-              sed -i 's/id[[:space:]]\+"org.jetbrains.kotlin.android"[[:space:]]\+version[[:space:]]\+"[^"]*"/id "org.jetbrains.kotlin.android" version "1.9.24"/' "$APP/android/settings.gradle" || true
-            fi
-            if [ -f "$APP/android/build.gradle" ]; then
-              sed -i "s/ext\.kotlin_version\s*=.*/ext.kotlin_version = '1.9.24'/" "$APP/android/build.gradle" || true
-              sed -i 's/kotlin-gradle-plugin:[0-9][^"]*/kotlin-gradle-plugin:1.9.24/' "$APP/android/build.gradle" || true
-            fi
-          done
-
-      # AGP 8.5.2
-      - name: Bump Android Gradle Plugin to 8.5.2 (both apps)
-        run: |
-          set -eux
-          for APP in simple_live_app simple_live_tv_app; do
-            if [ -f "$APP/android/settings.gradle" ]; then
-              sed -i 's/id[[:space:]]\+"com\.android\.application"[[:space:]]\+version[[:space:]]\+"[^"]*"/id "com.android.application" version "8.5.2"/' "$APP/android/settings.gradle" || true
-              sed -i 's/id[[:space:]]\+"com\.android\.library"[[:space:]]\+version[[:space:]]\+"[^"]*"/id "com.android.library" version "8.5.2"/' "$APP/android/settings.gradle" || true
-            fi
-          done
-
-      # 旧式 classpath 的兼容
-      - name: Force AGP classpath to 8.5.2 for legacy builds (both apps)
-        run: |
-          set -eux
-          for APP in simple_live_app simple_live_tv_app; do
-            TOP="$APP/android/build.gradle"
-            if [ -f "$TOP" ]; then
-              sed -i 's#com\.android\.tools\.build:gradle:[0-9.]\+#com.android.tools.build:gradle:8.5.2#g' "$TOP" || true
-            fi
-          done
-
-      # compile/target SDK 36
-      - name: Set compileSdk/targetSdk to 36 (both apps)
-        run: |
-          set -eux
-          for APP in simple_live_app simple_live_tv_app; do
-            FILE="$APP/android/app/build.gradle"
-            if [ -f "$FILE" ]; then
-              sed -i 's/compileSdkVersion[[:space:]]\+[0-9]\+/compileSdkVersion 36/' "$FILE" || true
-              sed -i 's/targetSdkVersion[[:space:]]\+[0-9]\+/targetSdkVersion 36/' "$FILE" || true
-            fi
-          done
-
-      # Gradle wrapper 8.7（AGP 8.5 最低）
-      - name: Bump Gradle wrapper to 8.7 (both apps)
-        run: |
-          set -eux
-          for APP in simple_live_app simple_live_tv_app; do
-            PROP="$APP/android/gradle/wrapper/gradle-wrapper.properties"
-            if [ -f "$PROP" ]; then
-              sed -i 's#^distributionUrl=.*#distributionUrl=https\://services.gradle.org/distributions/gradle-8.7-all.zip#' "$PROP"
-            fi
-            chmod +x "$APP/android/gradlew" || true
-          done
-
-      - name: Flutter doctor
-        run: flutter doctor -v
-
-      - name: Flutter pub get (app)
-        working-directory: simple_live_app
+      - name: Flutter pub get
         run: flutter pub get
 
-      - name: Flutter pub get (tv)
-        working-directory: simple_live_tv_app
-        run: flutter pub get
+      # 写入 gradle.properties 提高内存，避免 OOM
+      - name: Tune Gradle memory
+        run: |
+          mkdir -p ~/.gradle
+          cat >> ~/.gradle/gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8
+          org.gradle.daemon=false
+          android.useAndroidX=true
+          android.enableJetifier=true
+          EOF
 
-      # 给缺 namespace 的老插件打补丁（如 flutter_inappwebview 5.x）
-      - name: Patch namespaces for legacy plugins (AGP 8 requirement)
+      # 签名：优先用 Secrets（正式 keystore），否则生成临时 keystore，保证能编过
+      - name: Prepare signing
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -eux
-          BASE="$HOME/.pub-cache/hosted/pub.dev"
-          if [ -d "$BASE" ]; then
-            find "$BASE" -maxdepth 2 -type d -name android | while read -r ANDROID_DIR; do
-              B="$ANDROID_DIR/build.gradle"
-              M="$ANDROID_DIR/src/main/AndroidManifest.xml"
-              if [ -f "$B" ] && ! grep -qE '^[[:space:]]*namespace[[:space:]]' "$B"; then
-                if [ -f "$M" ]; then
-                  PKG=$(grep -m1 -oE 'package="[^"]+"' "$M" | sed -E 's/package="([^"]+)"/\1/')
-                  if [ -n "$PKG" ]; then
-                    awk -v ns="$PKG" '
-                      BEGIN{done=0}
-                      /android[[:space:]]*\{/ && done==0 {print; print "    namespace \"" ns "\""; done=1; next}
-                      {print}
-                    ' "$B" > "$B.new" && mv "$B.new" "$B"
-                  fi
-                fi
-              fi
-            done
-          fi
-      - name: Align Java/Kotlin toolchains to 17 for all modules
-        run: |
-          set -eux
-          fix_module() {
-            local DIR="$1"
-            local B="$DIR/build.gradle"
-            [ -f "$B" ] || return 0
-            # 追加 android{} 块；Gradle 会与现有配置合并（不影响已有 compileOptions/kotlinOptions）
-            printf '\nandroid {\n' >> "$B"
-            printf '    compileOptions {\n' >> "$B"
-            printf '        sourceCompatibility JavaVersion.VERSION_17\n' >> "$B"
-            printf '        targetCompatibility JavaVersion.VERSION_17\n' >> "$B"
-            printf '    }\n' >> "$B"
-            printf '    kotlinOptions {\n' >> "$B"
-            printf '        jvmTarget = "17"\n' >> "$B"
-            printf '    }\n' >> "$B"
-            printf '}\n' >> "$B"
-          }
-          # 处理两个 app 模块
-          fix_module simple_live_app/android/app
-          fix_module simple_live_tv_app/android/app
-          # 扫描 pub 缓存中的所有插件模块
-          BASE="$HOME/.pub-cache/hosted/pub.dev"
-          if [ -d "$BASE" ]; then
-            find "$BASE" -maxdepth 2 -type d -name android | while read -r ANDROID_DIR; do
-              fix_module "$ANDROID_DIR"
-            done
-          fi
-      # ✅ 关键修复：开启 core library desugaring，修复 qr_code_scanner 报错
-      - name: Enable core library desugaring (both apps)
-        run: |
-          set -eux
-          for APP in simple_live_app simple_live_tv_app; do
-            APP_GRADLE="$APP/android/app/build.gradle"
-            if [ -f "$APP_GRADLE" ]; then
-              # 追加一个 android{} 块（Gradle 会合并）
-              printf '\nandroid {\n' >> "$APP_GRADLE"
-              printf '    compileOptions {\n' >> "$APP_GRADLE"
-              printf '        sourceCompatibility JavaVersion.VERSION_17\n' >> "$APP_GRADLE"
-              printf '        targetCompatibility JavaVersion.VERSION_17\n' >> "$APP_GRADLE"
-              printf '        coreLibraryDesugaringEnabled true\n' >> "$APP_GRADLE"
-              printf '    }\n' >> "$APP_GRADLE"
-              printf '    kotlinOptions {\n' >> "$APP_GRADLE"
-              printf '        jvmTarget = "17"\n' >> "$APP_GRADLE"
-              printf '    }\n' >> "$APP_GRADLE"
-              printf '}\n' >> "$APP_GRADLE"
-              # 追加 desugar 依赖；多个 dependencies{} 可共存
-              printf '\ndependencies {\n' >> "$APP_GRADLE"
-              printf '    coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.0.4"\n' >> "$APP_GRADLE"
-              printf '}\n' >> "$APP_GRADLE"
-            fi
-          done
+          mkdir -p android
 
-      - name: Build release APK (app)
-        working-directory: simple_live_app
-        run: |
-          set -eux
-          # 生成临时 keystore
-          if [ ! -f "$HOME/simplelive-temp.jks" ]; then
-            keytool -genkey -v -keystore "$HOME/simplelive-temp.jks" \
-              -storepass "123456" -keypass "123456" \
-              -alias "upload" -keyalg RSA -keysize 2048 -validity 10000 \
+          if [[ -n "${KEYSTORE_BASE64:-}" ]]; then
+            echo "Using release keystore from secrets"
+            echo "$KEYSTORE_BASE64" | base64 -d > "$ANDROID_STORE_FILE"
+            STORE_PASSWORD="${KEYSTORE_PASSWORD}"
+            ALIAS="${KEY_ALIAS}"
+            KEY_PASS="${KEY_PASSWORD}"
+          else
+            echo "No keystore secrets found, generating a temporary keystore..."
+            keytool -genkey -v \
+              -keystore "$ANDROID_STORE_FILE" \
+              -storepass "$ANDROID_STORE_PASSWORD" \
+              -keypass "$ANDROID_KEY_PASSWORD" \
+              -alias "$ANDROID_KEY_ALIAS" \
+              -keyalg RSA -keysize 2048 -validity 10000 \
               -dname "CN=CI, OU=CI, O=CI, L=CI, S=CI, C=US"
+            STORE_PASSWORD="$ANDROID_STORE_PASSWORD"
+            ALIAS="$ANDROID_KEY_ALIAS"
+            KEY_PASS="$ANDROID_KEY_PASSWORD"
           fi
-          mkdir -p android
-          {
-            echo "storePassword=123456"
-            echo "keyPassword=123456"
-            echo "keyAlias=upload"
-            echo "storeFile=$HOME/simplelive-temp.jks"
-          } > android/key.properties
-          flutter build apk --release
 
-      - name: Build release APK (tv)
-        working-directory: simple_live_tv_app
+          # 写 key.properties（Flutter 标准签名配置）
+          cat > android/key.properties <<EOF
+          storePassword=$STORE_PASSWORD
+          keyPassword=$KEY_PASS
+          keyAlias=$ALIAS
+          storeFile=$(pwd)/$ANDROID_STORE_FILE
+          EOF
+
+          echo "key.properties created:"
+          cat android/key.properties | sed 's/=.*/=*** (hidden)/g'
+
+      # 构建（根据输入分别生成 apk / aab）
+      - name: Build Android
+        shell: bash
         run: |
           set -eux
-          mkdir -p android
-          {
-            echo "storePassword=123456"
-            echo "keyPassword=123456"
-            echo "keyAlias=upload"
-            echo "storeFile=$HOME/simplelive-temp.jks"
-          } > android/key.properties
-          flutter build apk --release
+          target="${{ github.event.inputs.buildTargets || 'both' }}"
+          if [[ "$target" == "apk" ]]; then
+            flutter build apk --release
+          elif [[ "$target" == "aab" ]]; then
+            flutter build appbundle --release
+          else
+            flutter build apk --release
+            flutter build appbundle --release
+          fi
+          ls -al build/app/outputs/** || true
 
-      - name: Upload APK artifacts
+      - name: Upload APK artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: SimpleLive-Release-APKs
-          path: |
-            simple_live_app/build/app/outputs/flutter-apk/app-release.apk
-            simple_live_tv_app/build/app/outputs/flutter-apk/app-release.apk
+          name: app-release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload AAB artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-aab
+          path: build/app/outputs/bundle/release/app-release.aab
+          if-no-files-found: warn
+          retention-days: 14
