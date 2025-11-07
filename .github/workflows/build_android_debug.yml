@@ -19,6 +19,10 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      # 安装 Android SDK（含 cmdline-tools），提供 sdkmanager
+      - name: Set up Android SDK (cmdline-tools)
+        uses: android-actions/setup-android@v3
+
       - name: Set up Flutter 3.22.x
         uses: subosito/flutter-action@v2
         with:
@@ -44,36 +48,51 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pub-
 
-      - name: Install Android SDK components (API 35)
+      # 安装 36 平台与工具；若之前拉到坏包则先移除再装
+      - name: Install Android SDK components (API 36)
         run: |
+          set -eux
           ANDROID_SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          rm -rf "${ANDROID_SDK}/platforms/android-36" || true
           yes | "${ANDROID_SDK}/cmdline-tools/latest/bin/sdkmanager" --licenses
           yes | "${ANDROID_SDK}/cmdline-tools/latest/bin/sdkmanager" \
-            "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+            "platform-tools" "platforms;android-36" "build-tools;36.0.0-rc1"
 
+      # 升级 Kotlin Gradle 插件到 1.9.24（解决 1.6/1.8 元数据不兼容）
       - name: Force Kotlin Gradle plugin to 1.9.24 (both apps)
         run: |
           set -eux
           for APP in simple_live_app simple_live_tv_app; do
             if [ -f "$APP/android/settings.gradle" ]; then
-              # plugins DSL
               sed -i 's/id[[:space:]]\+"org.jetbrains.kotlin.android"[[:space:]]\+version[[:space:]]\+"[^"]*"/id "org.jetbrains.kotlin.android" version "1.9.24"/' "$APP/android/settings.gradle" || true
             fi
             if [ -f "$APP/android/build.gradle" ]; then
-              # legacy ext.kotlin_version
               sed -i "s/ext\.kotlin_version\s*=.*/ext.kotlin_version = '1.9.24'/" "$APP/android/build.gradle" || true
               sed -i 's/kotlin-gradle-plugin:[0-9][^"]*/kotlin-gradle-plugin:1.9.24/' "$APP/android/build.gradle" || true
             fi
           done
 
-      - name: Pin media_kit_libs_android_video to 1.1.6 (CI only)
+      # 升级 Android Gradle Plugin 到 8.5.2（更稳地支持 compileSdk 36）
+      - name: Bump Android Gradle Plugin to 8.5.2 (both apps)
         run: |
           set -eux
           for APP in simple_live_app simple_live_tv_app; do
-            cd "$APP"
-            # 只在 CI 进程里修改，不提交
-            dart pub add media_kit_libs_android_video:1.1.6
-            cd - >/dev/null
+            if [ -f "$APP/android/settings.gradle" ]; then
+              sed -i 's/id[[:space:]]\+"com\.android\.application"[[:space:]]\+version[[:space:]]\+"[^"]*"/id "com.android.application" version "8.5.2"/' "$APP/android/settings.gradle" || true
+              sed -i 's/id[[:space:]]\+"com\.android\.library"[[:space:]]\+version[[:space:]]\+"[^"]*"/id "com.android.library" version "8.5.2"/' "$APP/android/settings.gradle" || true
+            fi
+          done
+
+      # 把 compileSdk/targetSdk 改为 36（两套 app）
+      - name: Set compileSdk/targetSdk to 36 (both apps)
+        run: |
+          set -eux
+          for APP in simple_live_app simple_live_tv_app; do
+            FILE="$APP/android/app/build.gradle"
+            if [ -f "$FILE" ]; then
+              sed -i 's/compileSdkVersion[[:space:]]\+[0-9]\+/compileSdkVersion 36/' "$FILE" || true
+              sed -i 's/targetSdkVersion[[:space:]]\+[0-9]\+/targetSdkVersion 36/' "$FILE" || true
+            fi
           done
 
       - name: Flutter doctor
@@ -91,7 +110,6 @@ jobs:
         working-directory: simple_live_app
         run: |
           set -eux
-          # 生成临时 keystore
           if [ ! -f "$HOME/simplelive-temp.jks" ]; then
             keytool -genkey -v -keystore "$HOME/simplelive-temp.jks" \
               -storepass "123456" -keypass "123456" \
@@ -99,10 +117,12 @@ jobs:
               -dname "CN=CI, OU=CI, O=CI, L=CI, S=CI, C=US"
           fi
           mkdir -p android
-          echo "storePassword=123456" > android/key.properties
-          echo "keyPassword=123456" >> android/key.properties
-          echo "keyAlias=upload" >> android/key.properties
-          echo "storeFile=$HOME/simplelive-temp.jks" >> android/key.properties
+          {
+            echo "storePassword=123456"
+            echo "keyPassword=123456"
+            echo "keyAlias=upload"
+            echo "storeFile=$HOME/simplelive-temp.jks"
+          } > android/key.properties
           flutter build apk --release
 
       - name: Build release APK (tv)
@@ -110,10 +130,12 @@ jobs:
         run: |
           set -eux
           mkdir -p android
-          echo "storePassword=123456" > android/key.properties
-          echo "keyPassword=123456" >> android/key.properties
-          echo "keyAlias=upload" >> android/key.properties
-          echo "storeFile=$HOME/simplelive-temp.jks" >> android/key.properties
+          {
+            echo "storePassword=123456"
+            echo "keyPassword=123456"
+            echo "keyAlias=upload"
+            echo "storeFile=$HOME/simplelive-temp.jks"
+          } > android/key.properties
           flutter build apk --release
 
       - name: Upload APK artifacts
