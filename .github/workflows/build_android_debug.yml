@@ -30,6 +30,7 @@ jobs:
           channel: 'stable'
           cache: true
 
+      # 缓存（可选但推荐）
       - name: Cache Gradle
         uses: actions/cache@v4
         with:
@@ -83,6 +84,17 @@ jobs:
             fi
           done
 
+      # 如果是旧式 classpath 写法，强制 classpath 到 AGP 8.5.2（新式 plugins 块已在上一步处理）
+      - name: Force AGP classpath to 8.5.2 for legacy builds (both apps)
+        run: |
+          set -eux
+          for APP in simple_live_app simple_live_tv_app; do
+            TOP="$APP/android/build.gradle"
+            if [ -f "$TOP" ]; then
+              sed -i 's#com\.android\.tools\.build:gradle:[0-9.]\+#com.android.tools.build:gradle:8.5.2#g' "$TOP" || true
+            fi
+          done
+
       # 把 compileSdk/targetSdk 改为 36（两套 app）
       - name: Set compileSdk/targetSdk to 36 (both apps)
         run: |
@@ -93,6 +105,19 @@ jobs:
               sed -i 's/compileSdkVersion[[:space:]]\+[0-9]\+/compileSdkVersion 36/' "$FILE" || true
               sed -i 's/targetSdkVersion[[:space:]]\+[0-9]\+/targetSdkVersion 36/' "$FILE" || true
             fi
+          done
+
+      # 升级 Gradle wrapper 到 8.7（AGP 8.5 的最低要求）
+      - name: Bump Gradle wrapper to 8.7 (both apps)
+        run: |
+          set -eux
+          for APP in simple_live_app simple_live_tv_app; do
+            PROP="$APP/android/gradle/wrapper/gradle-wrapper.properties"
+            if [ -f "$PROP" ]; then
+              sed -i 's#^distributionUrl=.*#distributionUrl=https\://services.gradle.org/distributions/gradle-8.7-all.zip#' "$PROP"
+            fi
+            # wrapper 脚本可能不存在或无执行权限，忽略错误
+            chmod +x "$APP/android/gradlew" || true
           done
 
       - name: Flutter doctor
@@ -110,6 +135,7 @@ jobs:
         working-directory: simple_live_app
         run: |
           set -eux
+          # 生成临时 keystore
           if [ ! -f "$HOME/simplelive-temp.jks" ]; then
             keytool -genkey -v -keystore "$HOME/simplelive-temp.jks" \
               -storepass "123456" -keypass "123456" \
