@@ -45,12 +45,18 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install required Android components
+      - name: Install required Android components (non-interactive)
         shell: bash
         run: |
           set -eux
-          yes | sdkmanager --licenses >/dev/null
-          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" >/dev/null
+          sdkmanager --version
+          # 安装组件时直接自动接受许可
+          yes | sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0" >/dev/null
+
+          # 额外再尝试一次接受所有许可；在某些 runner 上 yes 会 Broken pipe，
+          # 用 || true 保证不会让步骤失败
+          (yes | sdkmanager --licenses >/dev/null) || true
+
 
       - name: Set up Flutter ${{ env.FLUTTER_VERSION }}
         uses: subosito/flutter-action@v2
@@ -135,6 +141,9 @@ jobs:
             echo "keyAlias=upload"
             echo "storeFile=$KEYPATH"
           } > "$APP_DIR/android/key.properties"
+      - name: Ensure gradlew is executable
+        run: |
+          chmod +x ${{ github.workspace }}/${{ inputs.app_path }}/android/gradlew || true
 
       # --------------- BUILD ---------------
       - name: Build release APK
