@@ -1,319 +1,62 @@
-name: Android Release Build (mobile/tv)
+# .github/workflows/build_android_release.yml
 
+name: Build Android Release
+
+# 触发器：当有代码推送到 master 分支时触发
 on:
-  workflow_dispatch:
-    inputs:
-      targets:
-        description: "构建目标: mobile / tv / both"
-        required: false
-        default: "both"
-      build:
-        description: "包类型: apk / aab / both"
-        required: false
-        default: "both"
   push:
-    tags:
-      - "v*"
-
-env:
-  CI: true
-  ANDROID_KEY_ALIAS: upload
-  ANDROID_KEY_PASSWORD: 123456
-  ANDROID_STORE_PASSWORD: 123456
-  ANDROID_STORE_FILE: simplelive-temp.jks
+    branches:
+      - master
+  # 允许手动触发
+  workflow_dispatch:
 
 jobs:
-  build-mobile:
-    name: Build mobile (simple_live_app)
+  build-android:
+    name: Build Android App Bundle
     runs-on: ubuntu-latest
-    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.targets == 'both' || github.event.inputs.targets == 'mobile' }}
 
     steps:
-      - name: Checkout
+      # 1. 检出代码
+      - name: Checkout Repository
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 0
 
-      - name: Set up Java 17
+      # 2. 设置 Java 环境 (Android 编译需要)
+      - name: Setup Java JDK
         uses: actions/setup-java@v4
         with:
-          distribution: temurin
-          java-version: "17"
+          distribution: 'temurin' # 使用 Temurin (Eclipse Adoptium)
+          java-version: '17'     # 建议使用 JDK 17
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install SDK components
-        run: |
-          sdkmanager --licenses <<< "y"
-          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
-
-      - name: Set up Flutter (stable)
+      # 3. 设置 Flutter 环境 (关键：指定项目要求的版本)
+      #    该项目 README 指定了 Flutter 3.22
+      - name: Setup Flutter SDK
         uses: subosito/flutter-action@v2
         with:
-          channel: stable
-          cache: true
+          flutter-version: '3.22.0' # 精确指定版本以确保一致性
+          channel: 'stable'
+          cache: true # 启用 Flutter SDK 缓存
 
-      - name: Flutter doctor
-        run: flutter doctor -v
+      # 4. 切换到 Flutter app 目录
+      #    这是一个 monorepo，必须进入 app 的子目录
+      - name: Change to app directory
+        run: cd simple_live_app
 
-      - name: Cache Gradle
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
-
-      - name: Cache Flutter pub
-        uses: actions/cache@v4
-        with:
-          path: ~/.pub-cache
-          key: ${{ runner.os }}-pub-${{ hashFiles('simple_live_app/pubspec.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pub-
-
-      # 关键覆盖：intl 与 media_kit_video
-      - name: Write pubspec_overrides (intl=0.20.2, media_kit_video ^1.3.0)
-        working-directory: simple_live_app
-        run: |
-          cat > pubspec_overrides.yaml <<'EOF'
-          dependency_overrides:
-            intl: 0.20.2
-            media_kit_video: ^1.3.0
-          EOF
-          rm -f pubspec.lock
-
-      - name: Pub get
-        working-directory: simple_live_app
+      # 5. 获取 Flutter 依赖
+      #    注意：所有 flutter 命令都需要在 app 目录中运行
+      - name: Get Flutter dependencies
         run: flutter pub get
+        working-directory: ./simple_live_app # 指定工作目录
 
-      - name: Tune Gradle memory
-        run: |
-          mkdir -p ~/.gradle
-          cat >> ~/.gradle/gradle.properties <<'EOF'
-          org.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8
-          org.gradle.daemon=false
-          android.useAndroidX=true
-          android.enableJetifier=true
-          EOF
+      # 6. 编译 Android App Bundle (Release)
+      - name: Build Android App Bundle
+        run: flutter build appbundle --release
+        working-directory: ./simple_live_app # 指定工作目录
 
-      - name: Prepare signing (release keystore if provided, else temp)
-        shell: bash
-        working-directory: simple_live_app
-        env:
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          set -eux
-          cd android
-          if [[ -n "${KEYSTORE_BASE64:-}" ]]; then
-            echo "$KEYSTORE_BASE64" | base64 -d > "$GITHUB_WORKSPACE/simple_live_app/${ANDROID_STORE_FILE}"
-            STORE_PASSWORD="${KEYSTORE_PASSWORD}"
-            ALIAS="${KEY_ALIAS}"
-            KEY_PASS="${KEY_PASSWORD}"
-          else
-            keytool -genkey -v \
-              -keystore "$GITHUB_WORKSPACE/simple_live_app/${ANDROID_STORE_FILE}" \
-              -storepass "$ANDROID_STORE_PASSWORD" \
-              -keypass "$ANDROID_KEY_PASSWORD" \
-              -alias "$ANDROID_KEY_ALIAS" \
-              -keyalg RSA -keysize 2048 -validity 10000 \
-              -dname "CN=CI, OU=CI, O=CI, L=CI, S=CI, C=US"
-            STORE_PASSWORD="$ANDROID_STORE_PASSWORD"
-            ALIAS="$ANDROID_KEY_ALIAS"
-            KEY_PASS="$ANDROID_KEY_PASSWORD"
-          fi
-          cat > key.properties <<EOF
-          storePassword=$STORE_PASSWORD
-          keyPassword=$KEY_PASS
-          keyAlias=$ALIAS
-          storeFile=$GITHUB_WORKSPACE/simple_live_app/${ANDROID_STORE_FILE}
-          EOF
-          sed -n 's/=.*/=*** (hidden)/p' key.properties
-
-      - name: Build Android
-        shell: bash
-        working-directory: simple_live_app
-        run: |
-          set -eux
-          build="${{ github.event.inputs.build || 'both' }}"
-          if [[ "$build" == "apk" ]]; then
-            flutter build apk --release
-          elif [[ "$build" == "aab" ]]; then
-            flutter build appbundle --release
-          else
-            flutter build apk --release
-            flutter build appbundle --release
-          fi
-          ls -al build/app/outputs/** || true
-
-      - name: Upload APK
-        if: always()
+      # 7. 上传构建产物 (AAB 文件)
+      #    这样您就可以在 Actions 页面下载编译好的文件
+      - name: Upload Artifact (App Bundle)
         uses: actions/upload-artifact@v4
         with:
-          name: mobile-app-release-apk
-          path: simple_live_app/build/app/outputs/flutter-apk/app-release.apk
-          if-no-files-found: warn
-          retention-days: 14
-
-      - name: Upload AAB
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: mobile-app-release-aab
+          name: release-appbundle
           path: simple_live_app/build/app/outputs/bundle/release/app-release.aab
-          if-no-files-found: warn
-          retention-days: 14
-
-  build-tv:
-    name: Build tv (simple_live_tv_app)
-    runs-on: ubuntu-latest
-    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.targets == 'both' || github.event.inputs.targets == 'tv' }}
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 0
-
-      - name: Set up Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install SDK components
-        run: |
-          sdkmanager --licenses <<< "y"
-          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
-
-      - name: Set up Flutter (stable)
-        uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          cache: true
-
-      - name: Flutter doctor
-        run: flutter doctor -v
-
-      - name: Cache Gradle
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
-
-      - name: Cache Flutter pub
-        uses: actions/cache@v4
-        with:
-          path: ~/.pub-cache
-          key: ${{ runner.os }}-pub-${{ hashFiles('simple_live_tv_app/pubspec.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pub-
-
-      - name: Write pubspec_overrides (intl=0.20.2, media_kit_video ^1.3.0)
-        working-directory: simple_live_tv_app
-        run: |
-          cat > pubspec_overrides.yaml <<'EOF'
-          dependency_overrides:
-            intl: 0.20.2
-            media_kit_video: ^1.3.0
-          EOF
-          rm -f pubspec.lock
-
-      - name: Pub get
-        working-directory: simple_live_tv_app
-        run: flutter pub get
-
-      - name: Tune Gradle memory
-        run: |
-          mkdir -p ~/.gradle
-          cat >> ~/.gradle/gradle.properties <<'EOF'
-          org.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8
-          org.gradle.daemon=false
-          android.useAndroidX=true
-          android.enableJetifier=true
-          EOF
-
-      - name: Prepare signing (release keystore if provided, else temp)
-        shell: bash
-        working-directory: simple_live_tv_app
-        env:
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          set -eux
-          cd android
-          if [[ -n "${KEYSTORE_BASE64:-}" ]]; then
-            echo "$KEYSTORE_BASE64" | base64 -d > "$GITHUB_WORKSPACE/simple_live_tv_app/${ANDROID_STORE_FILE}"
-            STORE_PASSWORD="${KEYSTORE_PASSWORD}"
-            ALIAS="${KEY_ALIAS}"
-            KEY_PASS="${KEY_PASSWORD}"
-          else
-            keytool -genkey -v \
-              -keystore "$GITHUB_WORKSPACE/simple_live_tv_app/${ANDROID_STORE_FILE}" \
-              -storepass "$ANDROID_STORE_PASSWORD" \
-              -keypass "$ANDROID_KEY_PASSWORD" \
-              -alias "$ANDROID_KEY_ALIAS" \
-              -keyalg RSA -keysize 2048 -validity 10000 \
-              -dname "CN=CI, OU=CI, O=CI, L=CI, S=CI, C=US"
-            STORE_PASSWORD="$ANDROID_STORE_PASSWORD"
-            ALIAS="$ANDROID_KEY_ALIAS"
-            KEY_PASS="$ANDROID_KEY_PASSWORD"
-          fi
-          cat > key.properties <<EOF
-          storePassword=$STORE_PASSWORD
-          keyPassword=$KEY_PASS
-          keyAlias=$ALIAS
-          storeFile=$GITHUB_WORKSPACE/simple_live_tv_app/${ANDROID_STORE_FILE}
-          EOF
-          sed -n 's/=.*/=*** (hidden)/p' key.properties
-
-      - name: Build Android
-        shell: bash
-        working-directory: simple_live_tv_app
-        run: |
-          set -eux
-          build="${{ github.event.inputs.build || 'both' }}"
-          if [[ "$build" == "apk" ]]; then
-            flutter build apk --release
-          elif [[ "$build" == "aab" ]]; then
-            flutter build appbundle --release
-          else
-            flutter build apk --release
-            flutter build appbundle --release
-          fi
-          ls -al build/app/outputs/** || true
-
-      - name: Upload APK
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: tv-app-release-apk
-          path: simple_live_tv_app/build/app/outputs/flutter-apk/app-release.apk
-          if-no-files-found: warn
-          retention-days: 14
-
-      - name: Upload AAB
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: tv-app-release-aab
-          path: simple_live_tv_app/build/app/outputs/bundle/release/app-release.aab
-          if-no-files-found: warn
-          retention-days: 14
+          if-no-files-found: error # 如果没找到文件，则报错
