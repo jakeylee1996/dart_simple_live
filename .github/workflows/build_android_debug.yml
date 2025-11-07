@@ -1,10 +1,14 @@
-name: Android Release Build
+name: Android Release Build (mobile/tv)
 
 on:
   workflow_dispatch:
     inputs:
-      buildTargets:
-        description: "选择构建目标（apk / aab / both）"
+      targets:
+        description: "构建目标: mobile / tv / both"
+        required: false
+        default: "both"
+      build:
+        description: "包类型: apk / aab / both"
         required: false
         default: "both"
   push:
@@ -12,12 +16,21 @@ on:
       - "v*"
 
 jobs:
-  build-android:
+  build:
+    name: Build ${{ matrix.name }}
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: mobile
+            app_dir: simple_live_app
+          - name: tv
+            app_dir: simple_live_tv_app
+    # 只在选择的目标上跑
+    if: ${{ (github.event.inputs.targets || 'both') == 'both' || contains(github.event.inputs.targets, matrix.name) }}
+
     env:
-      # Flutter 会读取这个变量以显示更详细日志
       CI: true
-      # 默认签名信息（仅临时 keystore 使用）
       ANDROID_KEY_ALIAS: upload
       ANDROID_KEY_PASSWORD: 123456
       ANDROID_STORE_PASSWORD: 123456
@@ -47,7 +60,7 @@ jobs:
       - name: Set up Flutter (stable)
         uses: subosito/flutter-action@v2
         with:
-          channel: "stable"
+          channel: stable
           cache: true
 
       - name: Flutter doctor
@@ -67,14 +80,14 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.pub-cache
-          key: ${{ runner.os }}-pub-${{ hashFiles('**/pubspec.lock') }}
+          key: ${{ runner.os }}-pub-${{ hashFiles(format('{0}/pubspec.lock', matrix.app_dir)) }}
           restore-keys: |
             ${{ runner.os }}-pub-
 
-      - name: Flutter pub get
+      - name: Pub get
+        working-directory: ${{ matrix.app_dir }}
         run: flutter pub get
 
-      # 写入 gradle.properties 提高内存，避免 OOM
       - name: Tune Gradle memory
         run: |
           mkdir -p ~/.gradle
@@ -85,9 +98,9 @@ jobs:
           android.enableJetifier=true
           EOF
 
-      # 签名：优先用 Secrets（正式 keystore），否则生成临时 keystore，保证能编过
-      - name: Prepare signing
+      - name: Prepare signing (release keystore if provided, else temp)
         shell: bash
+        working-directory: ${{ matrix.app_dir }}
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -95,18 +108,18 @@ jobs:
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -eux
-          mkdir -p android
+          cd android
 
           if [[ -n "${KEYSTORE_BASE64:-}" ]]; then
-            echo "Using release keystore from secrets"
-            echo "$KEYSTORE_BASE64" | base64 -d > "$ANDROID_STORE_FILE"
+            echo "Using keystore from secrets"
+            echo "$KEYSTORE_BASE64" | base64 -d > "$GITHUB_WORKSPACE/${{ matrix.app_dir }}/${ANDROID_STORE_FILE}"
             STORE_PASSWORD="${KEYSTORE_PASSWORD}"
             ALIAS="${KEY_ALIAS}"
             KEY_PASS="${KEY_PASSWORD}"
           else
-            echo "No keystore secrets found, generating a temporary keystore..."
+            echo "Generating temporary keystore..."
             keytool -genkey -v \
-              -keystore "$ANDROID_STORE_FILE" \
+              -keystore "$GITHUB_WORKSPACE/${{ matrix.app_dir }}/${ANDROID_STORE_FILE}" \
               -storepass "$ANDROID_STORE_PASSWORD" \
               -keypass "$ANDROID_KEY_PASSWORD" \
               -alias "$ANDROID_KEY_ALIAS" \
@@ -117,26 +130,25 @@ jobs:
             KEY_PASS="$ANDROID_KEY_PASSWORD"
           fi
 
-          # 写 key.properties（Flutter 标准签名配置）
-          cat > android/key.properties <<EOF
+          cat > key.properties <<EOF
           storePassword=$STORE_PASSWORD
           keyPassword=$KEY_PASS
           keyAlias=$ALIAS
-          storeFile=$(pwd)/$ANDROID_STORE_FILE
+          storeFile=$GITHUB_WORKSPACE/${{ matrix.app_dir }}/${ANDROID_STORE_FILE}
           EOF
 
-          echo "key.properties created:"
-          cat android/key.properties | sed 's/=.*/=*** (hidden)/g'
+          echo "key.properties created (masked):"
+          sed 's/=.*/=*** (hidden)/g' key.properties
 
-      # 构建（根据输入分别生成 apk / aab）
       - name: Build Android
         shell: bash
+        working-directory: ${{ matrix.app_dir }}
         run: |
           set -eux
-          target="${{ github.event.inputs.buildTargets || 'both' }}"
-          if [[ "$target" == "apk" ]]; then
+          build="${{ github.event.inputs.build || 'both' }}"
+          if [[ "$build" == "apk" ]]; then
             flutter build apk --release
-          elif [[ "$target" == "aab" ]]; then
+          elif [[ "$build" == "aab" ]]; then
             flutter build appbundle --release
           else
             flutter build apk --release
@@ -144,20 +156,20 @@ jobs:
           fi
           ls -al build/app/outputs/** || true
 
-      - name: Upload APK artifact
+      - name: Upload APK
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: app-release-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
+          name: ${{ matrix.name }}-app-release-apk
+          path: ${{ matrix.app_dir }}/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Upload AAB artifact
+      - name: Upload AAB
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: app-release-aab
-          path: build/app/outputs/bundle/release/app-release.aab
+          name: ${{ matrix.name }}-app-release-aab
+          path: ${{ matrix.app_dir }}/build/app/outputs/bundle/release/app-release.aab
           if-no-files-found: warn
           retention-days: 14
