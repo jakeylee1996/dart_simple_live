@@ -161,19 +161,18 @@ jobs:
           for APP in simple_live_app simple_live_tv_app; do
             APP_GRADLE="$APP/android/app/build.gradle"
             if [ -f "$APP_GRADLE" ]; then
-              # 追加一个 android{} 块；Gradle 会和已有配置合并
+              # 追加一个 android{} 块（Gradle 会合并）
               printf '\nandroid {\n' >> "$APP_GRADLE"
               printf '    compileOptions {\n' >> "$APP_GRADLE"
-              printf '        sourceCompatibility JavaVersion.VERSION_1_8\n' >> "$APP_GRADLE"
-              printf '        targetCompatibility JavaVersion.VERSION_1_8\n' >> "$APP_GRADLE"
+              printf '        sourceCompatibility JavaVersion.VERSION_17\n' >> "$APP_GRADLE"
+              printf '        targetCompatibility JavaVersion.VERSION_17\n' >> "$APP_GRADLE"
               printf '        coreLibraryDesugaringEnabled true\n' >> "$APP_GRADLE"
               printf '    }\n' >> "$APP_GRADLE"
               printf '    kotlinOptions {\n' >> "$APP_GRADLE"
-              printf '        jvmTarget = "1.8"\n' >> "$APP_GRADLE"
+              printf '        jvmTarget = "17"\n' >> "$APP_GRADLE"
               printf '    }\n' >> "$APP_GRADLE"
               printf '}\n' >> "$APP_GRADLE"
-
-              # 追加 desugar 依赖
+              # 追加 desugar 依赖；多个 dependencies{} 可共存
               printf '\ndependencies {\n' >> "$APP_GRADLE"
               printf '    coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.0.4"\n' >> "$APP_GRADLE"
               printf '}\n' >> "$APP_GRADLE"
