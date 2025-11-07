@@ -22,19 +22,15 @@ jobs:
     runs-on: ubuntu-22.04
 
     env:
-      # Flutter 版本锁定到 3.22.x，避免因新版破坏性变更导致构建失败
-      FLUTTER_VERSION: "3.22.x"
-      ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
+      FLUTTER_VERSION: "3.22.x"      # 固定版本，避免不兼容
       JAVA_DISTRIBUTION: "temurin"
       JAVA_VERSION: "17"
-      # 缓存 key 相关
       PUB_CACHE_PATH: "~/.pub-cache"
       GRADLE_CACHE_PATH: "~/.gradle/caches"
       GRADLE_WRAPPER_PATH: "~/.gradle/wrapper"
 
     steps:
       - name: Checkout
-      # 如果你有 Git Submodule，这里可以加上 submodules: true
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -53,9 +49,7 @@ jobs:
         shell: bash
         run: |
           set -eux
-          sdkmanager --version
           yes | sdkmanager --licenses >/dev/null
-          # 安装常见构建所需组件；如项目固定其他版本，请在此调整
           sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" >/dev/null
 
       - name: Set up Flutter ${{ env.FLUTTER_VERSION }}
@@ -95,7 +89,7 @@ jobs:
         working-directory: ${{ github.workspace }}/${{ inputs.app_path }}
         run: flutter pub get
 
-      # --------------- SIGNING (两种方式：优先使用Secrets；否则生成临时签名) ---------------
+      # --------------- SIGNING ---------------
       - name: Use keystore from GitHub Secrets (if provided)
         id: keystore_from_secret
         shell: bash
@@ -120,7 +114,6 @@ jobs:
             } > "$APP_DIR/android/key.properties"
             echo "has_keystore=true" >> $GITHUB_OUTPUT
           else
-            echo "Secrets not provided."
             echo "has_keystore=false" >> $GITHUB_OUTPUT
           fi
 
@@ -148,7 +141,6 @@ jobs:
         shell: bash
         working-directory: ${{ github.workspace }}/${{ inputs.app_path }}
         env:
-          # 可根据项目需求调整内存等参数，提升稳定性
           GRADLE_OPTS: "-Dorg.gradle.jvmargs='-Xmx4g -XX:+UseParallelGC -XX:MaxMetaspaceSize=1g' -Dkotlin.daemon.jvm.options='-Xmx1g'"
         run: |
           set -eux
