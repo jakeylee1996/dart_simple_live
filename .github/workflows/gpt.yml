@@ -1,175 +1,233 @@
-name: Build Android (Simple Live)
+name: app-build-action-dev
 
 on:
   workflow_dispatch:
   push:
-    branches: [ master ]
+    branches:
+      - 'dev'
 
 jobs:
-  build-android:
-    runs-on: ubuntu-22.04
+  # 打包Android、iOS、Mac
+  build-mac-ios-android:
+    runs-on: macos-latest
 
-    env:
-      ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
-      ANDROID_HOME: ${{ github.workspace }}/android-sdk
-      JAVA_TOOL_OPTIONS: -Dfile.encoding=UTF-8
-      GRADLE_OPTS: -Dorg.gradle.jvmargs="-Xmx3g -Dfile.encoding=UTF-8"
+    permissions:
+      contents: write
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Java 17
-        uses: actions/setup-java@v4
+      # 签出代码
+      - uses: actions/checkout@v4
         with:
-          distribution: temurin
+          ref: dev
+
+      # APK签名设置
+      - name: Download Android keystore
+        id: android_keystore
+        uses: timheuer/base64-to-file@v1.2
+        with:
+          fileName: keystore.jks
+          encodedString: ${{ secrets.KEYSTORE_BASE64 }}
+      - name: Create key.properties
+        run: |
+          echo "storeFile=${{ steps.android_keystore.outputs.filePath }}" > simple_live_app/android/key.properties
+          echo "storePassword=${{ secrets.STORE_PASSWORD }}" >> simple_live_app/android/key.properties
+          echo "keyPassword=${{ secrets.KEY_PASSWORD }}" >> simple_live_app/android/key.properties
+          echo "keyAlias=${{ secrets.KEY_ALIAS }}" >> simple_live_app/android/key.properties
+      # 设置JAVA环境
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
           java-version: "17"
+          cache: "gradle"
 
-      # 统一 Kotlin / AGP / Gradle 版本，和 Flutter 3.22 兼容
-      - name: Pin Kotlin(1.9.22) & AGP(8.3.2) & Gradle(8.6)
+      # 设置Flutter
+      - name: Flutter action
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.22.x'
+          cache: true 
+
+      # 打开MAC Desktop支持
+      - name: Enable Flutter Desktop
+        run: flutter config --enable-macos-desktop
+
+      # 更新Flutter的packages
+      - name: Restore packages
         run: |
-          set -eux
-          for APP in simple_live_app simple_live_tv_app; do
-            # settings.gradle（新模板）
-            F="$APP/android/settings.gradle"
-            if [ -f "$F" ]; then
-              sed -i -E 's/(id "com\.android\.application" version ")[^"]+/\18.3.2/' "$F" || true
-              sed -i -E 's/(id "com\.android\.library" version ")[^"]+/\18.3.2/' "$F" || true
-              sed -i -E 's/(id "org\.jetbrains\.kotlin\.android" version ")[^"]+/\11.9.22/' "$F" || true
-            fi
-            # 旧模板兜底：project build.gradle 的 ext.kotlin_version
-            F="$APP/android/build.gradle"
-            if [ -f "$F" ]; then
-              sed -i -E 's/(ext\.kotlin_version\s*=\s*")[^"]+/\11.9.22/' "$F" || true
-            fi
-            # Gradle wrapper 固定到 8.6
-            F="$APP/android/gradle/wrapper/gradle-wrapper.properties"
-            if [ -f "$F" ]; then
-              sed -i -E 's#distributionUrl=.*#distributionUrl=https://services.gradle.org/distributions/gradle-8.6-bin.zip#' "$F"
-            fi
-          done
+          cd simple_live_app
+          flutter pub get
+      # 安装appdmg npm install -g appdmg
+      - name: Install appdmg
+        run: npm install -g appdmg
 
-      # 手动安装 Android SDK（带重试）
-      - name: Install Android cmdline-tools & SDK (robust)
+      # 设置flutter_distributor环境
+      - name: Install flutter_distributor
+        run: dart pub global activate flutter_distributor
+
+      # 打包APK
+      - name: Build APK
         run: |
-          set -eux
-          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
-          curl -L https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o /tmp/clt.zip
-          unzip -q /tmp/clt.zip -d "$ANDROID_SDK_ROOT/cmdline-tools"
-          mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+          cd simple_live_app
+          flutter build apk --release --split-per-abi
+      #上传Artifacts
+      - name: Upload APK to Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: |
+            simple_live_app/build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
+            simple_live_app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+            simple_live_app/build/app/outputs/flutter-apk/app-x86_64-release.apk
+      # TV APK签名设置
+      - name: Download Android TV keystore
+        id: android_tv_keystore
+        uses: timheuer/base64-to-file@v1.2
+        with:
+          fileName: keystore_tv.jks
+          encodedString: ${{ secrets.TV_KEYSTORE_BASE64 }}
+      - name: Create key.properties
+        run: |
+          echo "storeFile=${{ steps.android_tv_keystore.outputs.filePath }}" > simple_live_tv_app/android/key.properties
+          echo "storePassword=${{ secrets.TV_STORE_PASSWORD }}" >> simple_live_tv_app/android/key.properties
+          echo "keyPassword=${{ secrets.TV_KEY_PASSWORD }}" >> simple_live_tv_app/android/key.properties
+          echo "keyAlias=${{ secrets.TV_KEY_ALIAS }}" >> simple_live_tv_app/android/key.properties
+      #打包 Android TV APK
+      - name: Build TV APK
+        run: |
+          cd simple_live_tv_app
+          flutter build apk --release --split-per-abi
+      #上传TV APK至Artifacts
+      - name: Upload TV APK to Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android_tv
+          path: |
+            simple_live_tv_app/build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
+            simple_live_tv_app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+            simple_live_tv_app/build/app/outputs/flutter-apk/app-x86_64-release.apk
+      #打包iOS
+      - name: Build IPA
+        run: |
+          cd simple_live_app
+          flutter build ios --release --no-codesign
+      #创建未签名ipa
+      - name: Create IPA
+        run: |
+          cd simple_live_app
+          mkdir build/ios/iphoneos/Payload
+          cp -R build/ios/iphoneos/Runner.app build/ios/iphoneos/Payload/Runner.app
+          cd build/ios/iphoneos/
+          zip -q -r ios_no_sign.ipa Payload
+          cd ../../..
+      # 上传IPA至Artifacts
+      - name: Upload IPA to Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios
+          path: |
+            simple_live_app/build/ios/iphoneos/ios_no_sign.ipa
+      # 打包MAC
+      - name: Build MacOS
+        run: |
+          cd simple_live_app
+          flutter_distributor package --platform macos --targets dmg,zip --skip-clean
+      
+      # 上传MAC至Artifacts
+      - name: Upload MacOS to Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac
+          path: |
+            simple_live_app/build/dist/*/*.dmg
+            simple_live_app/build/dist/*/*.zip
+      #完成
+      - run: echo "🍏 This job's status is ${{ job.status }}."
 
-          for i in 1 2 3; do
-            "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
-              --sdk_root="$ANDROID_SDK_ROOT" \
-              "platform-tools" "build-tools;34.0.0" "platforms;android-34" && break || sleep 5
-          done
-
-      - name: Accept Android licenses
-        run: yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_SDK_ROOT" --licenses
-
-      - name: Set up Flutter 3.22.x
+  # 打包Linux
+  build-linux:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      # 签出代码
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+      # 设置Flutter环境
+      - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: "3.22.x"
-          channel: stable
           cache: true
-
-      - name: Flutter doctor (for debugging)
-        run: flutter doctor -v
-
-      # 生成临时签名
-      - name: Create temporary keystore for CI
+      # 安装依赖
+      - name: Update apt-get
+        run: sudo apt-get update
+      - name: Install Dependencies
+        run: sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libmpv-dev mpv
+      # 打开Linux Desktop支持
+      - name: Enable Flutter Desktop
+        run: flutter config --enable-linux-desktop
+      # 更新Flutter的packages
+      - name: Restore Packages
         run: |
-          set -eux
-          keytool -genkey -v \
-            -keystore "$HOME/simplelive-temp.jks" \
-            -storepass "123456" -keypass "123456" \
-            -alias "upload" -keyalg RSA -keysize 2048 -validity 10000 \
-            -dname "CN=CI, OU=CI, O=CI, L=CI, S=CI, C=US"
-
-          for APP in simple_live_app simple_live_tv_app; do
-            mkdir -p "$APP/android"
-            {
-              echo "storePassword=123456"
-              echo "keyPassword=123456"
-              echo "keyAlias=upload"
-              echo "storeFile=$HOME/simplelive-temp.jks"
-            } > "$APP/android/key.properties"
-          done
-
-      # 获取依赖
-      - name: Pub get (app)
-        working-directory: simple_live_app
-        run: flutter pub get
-
-      - name: Pub get (tv)
-        working-directory: simple_live_tv_app
-        run: flutter pub get
-
-      # ★ 自动修补：为缺少 namespace 的插件追加 android { namespace "…" }
-      - name: Patch missing namespaces in Android plugins
+          cd simple_live_app
+          flutter pub get
+      # 设置flutter_distributor环境
+      - name: Install flutter_distributor
+        run: dart pub global activate flutter_distributor
+      # build Linux ZIP\DMG
+      - name: Build Linux
         run: |
-          set -eux
-          PATCHED=0
-
-          # Groovy 版 build.gradle
-          while IFS= read -r -d '' G; do
-            if ! grep -q '^[[:space:]]*namespace[[:space:]]' "$G"; then
-              M="$(dirname "$G")/src/main/AndroidManifest.xml"
-              if [ -f "$M" ]; then
-                PKG=$(sed -n 's/.*package="\([^"]*\)".*/\1/p' "$M" | head -n1 || true)
-                if [ -n "$PKG" ]; then
-                  {
-                    echo ""
-                    echo "android {"
-                    echo "    namespace \"$PKG\""
-                    echo "}"
-                  } >> "$G"
-                  echo "Patched namespace (groovy): $G -> $PKG"
-                  PATCHED=1
-                fi
-              fi
-            fi
-          done < <(grep -rlZ --include=build.gradle 'com.android.library' "$HOME/.pub-cache/hosted/pub.dev" || true)
-
-          # Kotlin DSL 版 build.gradle.kts
-          while IFS= read -r -d '' G; do
-            if ! grep -q '^[[:space:]]*namespace[[:space:]]=' "$G"; then
-              M="$(dirname "$G")/src/main/AndroidManifest.xml"
-              if [ -f "$M" ]; then
-                PKG=$(sed -n 's/.*package="\([^"]*\)".*/\1/p' "$M" | head -n1 || true)
-                if [ -n "$PKG" ]; then
-                  {
-                    echo ""
-                    echo "android {"
-                    echo "    namespace = \"$PKG\""
-                    echo "}"
-                  } >> "$G"
-                  echo "Patched namespace (kts): $G -> $PKG"
-                  PATCHED=1
-                fi
-              fi
-            fi
-          done < <(grep -rlZ --include=build.gradle.kts 'com.android.library' "$HOME/.pub-cache/hosted/pub.dev" || true)
-
-          if [ "$PATCHED" -eq 0 ]; then
-            echo "No plugin needed namespace patch."
-          fi
-
-      # 构建
-      - name: Build release APK (app)
-        working-directory: simple_live_app
-        run: flutter build apk --release -v
-
-      - name: Build release APK (tv)
-        working-directory: simple_live_tv_app
-        run: flutter build apk --release -v
-
-      # 产物上传
-      - name: Upload APK artifacts
+          cd simple_live_app
+          flutter_distributor package --platform linux --targets deb,zip --skip-clean
+      # 上传Linux包至Artifacts
+      - name: Upload Linux APP to Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: SimpleLive-Release-APKs
+          name: linux
           path: |
-            simple_live_app/build/app/outputs/flutter-apk/app-release.apk
-            simple_live_tv_app/build/app/outputs/flutter-apk/app-release.apk
+            simple_live_app/build/dist/*/*.deb
+            simple_live_app/build/dist/*/*.zip
+        #完成
+      - run: echo "🍏 Linux job's status is ${{ job.status }}."
+
+  # 打包Windows
+  build-windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      # 签出代码
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+      # 设置Flutter环境
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.22.x"
+          cache: true
+      - name: Enable Flutter Desktop
+        run: flutter config --enable-windows-desktop
+      - name: Restore Packages
+        run: |
+          cd simple_live_app
+          flutter pub get
+      # 设置flutter_distributor环境
+      - name: Install flutter_distributor
+        run: dart pub global activate flutter_distributor
+      # build Windows ZIP\MSIX
+      - name: Build Windows
+        run: |
+          cd simple_live_app
+          flutter_distributor package --platform windows --targets msix,zip --skip-clean
+      # 上传Windows至Artifacts
+      - name: Upload Windows APP to Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            simple_live_app/build/dist/*/*.msix
+            simple_live_app/build/dist/*/*.zip
+        #完成
+      - run: echo "🍏 Windows job's status is ${{ job.status }}."
