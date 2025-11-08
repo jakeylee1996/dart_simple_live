@@ -7,11 +7,12 @@ on:
 
 jobs:
   build-android:
-    # 临时固定到 22.04，等稳定后可改回 ubuntu-latest 或 ubuntu-24.04
+    # 先固定 22.04（更接近你之前能成功的环境）；后续稳定后可改回 ubuntu-latest/24.04
     runs-on: ubuntu-22.04
 
     env:
       ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
+      ANDROID_HOME: ${{ github.workspace }}/android-sdk
       JAVA_TOOL_OPTIONS: -Dfile.encoding=UTF-8
       GRADLE_OPTS: -Dorg.gradle.jvmargs="-Xmx3g -Dfile.encoding=UTF-8"
 
@@ -25,18 +26,23 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      # 显式安装 Android SDK（包含 cmdline-tools / platform / build-tools）
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: |
-            platforms;android-34
-            build-tools;34.0.0
-            platform-tools
-            cmdline-tools;latest
+      # —— 手动安装 Android SDK（带重试，避免 sdkmanager 偶发拉不到包）——
+      - name: Install Android cmdline-tools & SDK (robust)
+        run: |
+          set -eux
+          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
+          curl -L https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o /tmp/clt.zip
+          unzip -q /tmp/clt.zip -d "$ANDROID_SDK_ROOT/cmdline-tools"
+          mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+
+          for i in 1 2 3; do
+            "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+              --sdk_root="$ANDROID_SDK_ROOT" \
+              "platform-tools" "build-tools;34.0.0" "platforms;android-34" && break || sleep 5
+          done
 
       - name: Accept Android licenses
-        run: yes | sdkmanager --licenses
+        run: yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_SDK_ROOT" --licenses
 
       - name: Set up Flutter 3.22.x
         uses: subosito/flutter-action@v2
@@ -45,18 +51,19 @@ jobs:
           channel: stable
           cache: true
 
-      #（可选）显示 doctor 信息帮助排错
-      - name: Flutter doctor
+      - name: Flutter doctor (for debugging)
         run: flutter doctor -v
 
-      # 生成临时签名（与之前一致）
+      # —— 生成临时签名（两套 APP 共用同一把测试证书）——
       - name: Create temporary keystore for CI
         run: |
+          set -eux
           keytool -genkey -v \
             -keystore "$HOME/simplelive-temp.jks" \
             -storepass "123456" -keypass "123456" \
             -alias "upload" -keyalg RSA -keysize 2048 -validity 10000 \
             -dname "CN=CI, OU=CI, O=CI, L=CI, S=CI, C=US"
+
           for APP in simple_live_app simple_live_tv_app; do
             mkdir -p "$APP/android"
             {
@@ -67,6 +74,7 @@ jobs:
             } > "$APP/android/key.properties"
           done
 
+      # —— 依赖获取 —— 
       - name: Pub get (app)
         working-directory: simple_live_app
         run: flutter pub get
@@ -75,7 +83,7 @@ jobs:
         working-directory: simple_live_tv_app
         run: flutter pub get
 
-      # 打开 -v 以便遇到问题能在日志里看到更具体原因
+      # —— 构建 —— 
       - name: Build release APK (app)
         working-directory: simple_live_app
         run: flutter build apk --release -v
@@ -84,6 +92,7 @@ jobs:
         working-directory: simple_live_tv_app
         run: flutter build apk --release -v
 
+      # —— 产物上传 —— 
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
