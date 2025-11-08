@@ -25,35 +25,31 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      # —— 修正 Kotlin/AGP/Gradle 版本到与 Flutter 3.22 兼容 —— 
+      # 统一 Kotlin / AGP / Gradle 版本，和 Flutter 3.22 兼容
       - name: Pin Kotlin(1.9.22) & AGP(8.3.2) & Gradle(8.6)
         run: |
           set -eux
-          # 1) settings.gradle 中的插件版本（新模板）
           for APP in simple_live_app simple_live_tv_app; do
-            FILE="$APP/android/settings.gradle"
-            if [ -f "$FILE" ]; then
-              sed -i -E 's/(id "com\.android\.application" version ")[^"]+/\18.3.2/' "$FILE" || true
-              sed -i -E 's/(id "com\.android\.library" version ")[^"]+/\18.3.2/' "$FILE" || true
-              sed -i -E 's/(id "org\.jetbrains\.kotlin\.android" version ")[^"]+/\11.9.22/' "$FILE" || true
+            # settings.gradle（新模板）
+            F="$APP/android/settings.gradle"
+            if [ -f "$F" ]; then
+              sed -i -E 's/(id "com\.android\.application" version ")[^"]+/\18.3.2/' "$F" || true
+              sed -i -E 's/(id "com\.android\.library" version ")[^"]+/\18.3.2/' "$F" || true
+              sed -i -E 's/(id "org\.jetbrains\.kotlin\.android" version ")[^"]+/\11.9.22/' "$F" || true
             fi
-          done
-          # 2) 旧模板：project build.gradle 里 ext.kotlin_version 的兜底
-          for APP in simple_live_app simple_live_tv_app; do
-            FILE="$APP/android/build.gradle"
-            if [ -f "$FILE" ]; then
-              sed -i -E 's/(ext\.kotlin_version\s*=\s*")[^"]+/\11.9.22/' "$FILE" || true
+            # 旧模板兜底：project build.gradle 的 ext.kotlin_version
+            F="$APP/android/build.gradle"
+            if [ -f "$F" ]; then
+              sed -i -E 's/(ext\.kotlin_version\s*=\s*")[^"]+/\11.9.22/' "$F" || true
             fi
-          done
-          # 3) Gradle wrapper 统一到 8.6（AGP 8.3.x 兼容）
-          for APP in simple_live_app simple_live_tv_app; do
-            FILE="$APP/android/gradle/wrapper/gradle-wrapper.properties"
-            if [ -f "$FILE" ]; then
-              sed -i -E 's#distributionUrl=.*#distributionUrl=https://services.gradle.org/distributions/gradle-8.6-bin.zip#' "$FILE"
+            # Gradle wrapper 固定到 8.6
+            F="$APP/android/gradle/wrapper/gradle-wrapper.properties"
+            if [ -f "$F" ]; then
+              sed -i -E 's#distributionUrl=.*#distributionUrl=https://services.gradle.org/distributions/gradle-8.6-bin.zip#' "$F"
             fi
           done
 
-      # —— 手动安装 Android SDK（稳）——
+      # 手动安装 Android SDK（带重试）
       - name: Install Android cmdline-tools & SDK (robust)
         run: |
           set -eux
@@ -62,7 +58,6 @@ jobs:
           unzip -q /tmp/clt.zip -d "$ANDROID_SDK_ROOT/cmdline-tools"
           mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest"
 
-          # 带重试，避免偶发取不到仓库索引
           for i in 1 2 3; do
             "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
               --sdk_root="$ANDROID_SDK_ROOT" \
@@ -82,7 +77,7 @@ jobs:
       - name: Flutter doctor (for debugging)
         run: flutter doctor -v
 
-      # —— 生成临时签名（两套 APP 共用）——
+      # 生成临时签名
       - name: Create temporary keystore for CI
         run: |
           set -eux
@@ -102,7 +97,7 @@ jobs:
             } > "$APP/android/key.properties"
           done
 
-      # —— 依赖获取 —— 
+      # 获取依赖
       - name: Pub get (app)
         working-directory: simple_live_app
         run: flutter pub get
@@ -111,7 +106,57 @@ jobs:
         working-directory: simple_live_tv_app
         run: flutter pub get
 
-      # —— 构建 —— 
+      # ★ 自动修补：为缺少 namespace 的插件追加 android { namespace "…" }
+      - name: Patch missing namespaces in Android plugins
+        run: |
+          set -eux
+          PATCHED=0
+
+          # Groovy 版 build.gradle
+          while IFS= read -r -d '' G; do
+            if ! grep -q '^[[:space:]]*namespace[[:space:]]' "$G"; then
+              M="$(dirname "$G")/src/main/AndroidManifest.xml"
+              if [ -f "$M" ]; then
+                PKG=$(sed -n 's/.*package="\([^"]*\)".*/\1/p' "$M" | head -n1 || true)
+                if [ -n "$PKG" ]; then
+                  {
+                    echo ""
+                    echo "android {"
+                    echo "    namespace \"$PKG\""
+                    echo "}"
+                  } >> "$G"
+                  echo "Patched namespace (groovy): $G -> $PKG"
+                  PATCHED=1
+                fi
+              fi
+            fi
+          done < <(grep -rlZ --include=build.gradle 'com.android.library' "$HOME/.pub-cache/hosted/pub.dev" || true)
+
+          # Kotlin DSL 版 build.gradle.kts
+          while IFS= read -r -d '' G; do
+            if ! grep -q '^[[:space:]]*namespace[[:space:]]=' "$G"; then
+              M="$(dirname "$G")/src/main/AndroidManifest.xml"
+              if [ -f "$M" ]; then
+                PKG=$(sed -n 's/.*package="\([^"]*\)".*/\1/p' "$M" | head -n1 || true)
+                if [ -n "$PKG" ]; then
+                  {
+                    echo ""
+                    echo "android {"
+                    echo "    namespace = \"$PKG\""
+                    echo "}"
+                  } >> "$G"
+                  echo "Patched namespace (kts): $G -> $PKG"
+                  PATCHED=1
+                fi
+              fi
+            fi
+          done < <(grep -rlZ --include=build.gradle.kts 'com.android.library' "$HOME/.pub-cache/hosted/pub.dev" || true)
+
+          if [ "$PATCHED" -eq 0 ]; then
+            echo "No plugin needed namespace patch."
+          fi
+
+      # 构建
       - name: Build release APK (app)
         working-directory: simple_live_app
         run: flutter build apk --release -v
@@ -120,7 +165,7 @@ jobs:
         working-directory: simple_live_tv_app
         run: flutter build apk --release -v
 
-      # —— 产物上传 —— 
+      # 产物上传
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
