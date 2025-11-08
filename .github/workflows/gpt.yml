@@ -7,7 +7,13 @@ on:
 
 jobs:
   build-android:
-    runs-on: ubuntu-latest
+    # 临时固定到 22.04，等稳定后可改回 ubuntu-latest 或 ubuntu-24.04
+    runs-on: ubuntu-22.04
+
+    env:
+      ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
+      JAVA_TOOL_OPTIONS: -Dfile.encoding=UTF-8
+      GRADLE_OPTS: -Dorg.gradle.jvmargs="-Xmx3g -Dfile.encoding=UTF-8"
 
     steps:
       - name: Checkout
@@ -16,27 +22,34 @@ jobs:
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
-          java-version: '17'
+          distribution: temurin
+          java-version: "17"
+
+      # 显式安装 Android SDK（包含 cmdline-tools / platform / build-tools）
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: |
+            platforms;android-34
+            build-tools;34.0.0
+            platform-tools
+            cmdline-tools;latest
+
+      - name: Accept Android licenses
+        run: yes | sdkmanager --licenses
 
       - name: Set up Flutter 3.22.x
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.22.x'
-          channel: 'stable'
+          flutter-version: "3.22.x"
+          channel: stable
           cache: true
 
+      #（可选）显示 doctor 信息帮助排错
       - name: Flutter doctor
         run: flutter doctor -v
 
-      - name: Flutter pub get (app)
-        working-directory: simple_live_app
-        run: flutter pub get
-
-      - name: Flutter pub get (tv)
-        working-directory: simple_live_tv_app
-        run: flutter pub get
-
+      # 生成临时签名（与之前一致）
       - name: Create temporary keystore for CI
         run: |
           keytool -genkey -v \
@@ -46,23 +59,35 @@ jobs:
             -dname "CN=CI, OU=CI, O=CI, L=CI, S=CI, C=US"
           for APP in simple_live_app simple_live_tv_app; do
             mkdir -p "$APP/android"
-            echo "storePassword=123456" > "$APP/android/key.properties"
-            echo "keyPassword=123456" >> "$APP/android/key.properties"
-            echo "keyAlias=upload" >> "$APP/android/key.properties"
-            echo "storeFile=$HOME/simplelive-temp.jks" >> "$APP/android/key.properties"
+            {
+              echo "storePassword=123456"
+              echo "keyPassword=123456"
+              echo "keyAlias=upload"
+              echo "storeFile=$HOME/simplelive-temp.jks"
+            } > "$APP/android/key.properties"
           done
-      - name: Build debug APK (app)
-        working-directory: simple_live_app
-        run: flutter build apk --release
 
-      - name: Build debug APK (tv)
+      - name: Pub get (app)
+        working-directory: simple_live_app
+        run: flutter pub get
+
+      - name: Pub get (tv)
         working-directory: simple_live_tv_app
-        run: flutter build apk --release
+        run: flutter pub get
+
+      # 打开 -v 以便遇到问题能在日志里看到更具体原因
+      - name: Build release APK (app)
+        working-directory: simple_live_app
+        run: flutter build apk --release -v
+
+      - name: Build release APK (tv)
+        working-directory: simple_live_tv_app
+        run: flutter build apk --release -v
 
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: SimpleLive-Debug-APKs
+          name: SimpleLive-Release-APKs
           path: |
             simple_live_app/build/app/outputs/flutter-apk/app-release.apk
             simple_live_tv_app/build/app/outputs/flutter-apk/app-release.apk
